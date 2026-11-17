@@ -122,6 +122,39 @@
 .boot-device-item.reordered {
     animation: reorder 0.3s ease;
 }
+
+/* Read-only node context for sizing CPU, memory and storage changes. */
+.resource-overview .cx-body { display: grid; gap: 14px; }
+.resource-overview-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.resource-overview-top .resource-state { color: var(--text-muted); font-size: 12px; margin-right: auto; }
+.resource-overview-top .btn-x { min-height: 42px; }
+.resource-overview-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.resource-overview-card { min-width: 0; border: 1px solid var(--border-soft); border-radius: var(--radius-sm); background: var(--panel-2); padding: 12px; }
+.resource-overview-card h3 { color: var(--text-faint); font-size: 10.5px; font-weight: 700; letter-spacing: .05em; margin: 0 0 7px; text-transform: uppercase; }
+.resource-overview-card .resource-value { color: var(--text); font-size: 16px; font-weight: 700; line-height: 1.35; overflow-wrap: anywhere; }
+.resource-overview-card .resource-detail { color: var(--text-muted); font-size: 11.5px; line-height: 1.45; margin-top: 5px; }
+.resource-storage-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin: 0; padding: 0; list-style: none; }
+.resource-storage-list li { min-width: 0; border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 10px; }
+.resource-storage-list .storage-name { display: block; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
+.resource-storage-list .storage-capacity { display: block; color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+.resource-storage-list .storage-permission { display: block; font-size: 10.5px; font-weight: 600; margin-top: 3px; }
+.resource-storage-list .storage-permission.allowed { color: var(--ok); }
+.resource-storage-list .storage-permission.denied { color: var(--danger); }
+.resource-storage-list .storage-permission.unknown { color: var(--warn); }
+.resource-overview details { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
+.resource-overview details summary { color: var(--text-faint); cursor: pointer; font-weight: 600; }
+.resource-overview details p { margin: 7px 0 0; }
+.resource-overview .unknown { color: var(--text-faint); font-weight: 500; }
+@media (max-width: 900px) {
+    .resource-overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 575.98px) {
+    .resource-overview-grid, .resource-storage-list { grid-template-columns: minmax(0, 1fr); }
+    .resource-overview-top .cx-title { flex-basis: 100%; }
+    .resource-overview-top .resource-state { flex: 1 1 150px; }
+    .resource-overview-card { padding: 11px; }
+    .resource-overview .cx-body { padding: 13px; }
+}
 </style>
 {% endblock %}
 
@@ -140,9 +173,45 @@
 <div class="callout warn mb-3">
     <i class="bi bi-exclamation-triangle"></i>
     <div><div class="t">Warning</div><div class="b">Some configuration changes require the {{ 'container' if vm_type == 'lxc' else 'VM' }} to be stopped to take effect.
-    Memory and CPU changes can be applied to running {{ 'containers' if vm_type == 'lxc' else 'VMs' }} but may need a restart for optimal performance.</div></div>
+    CPU or memory changes may require a restart before they take effect; this depends on the guest and its configuration.</div></div>
 </div>
 {% endif %}
+
+<section class="card-x resource-overview mb-3" id="resourceOverview" aria-labelledby="resourceOverviewTitle">
+    <div class="cx-head resource-overview-top">
+        <span class="cx-title" id="resourceOverviewTitle"><i class="bi bi-speedometer2"></i> Node capacity and configured allocations</span>
+        <span class="resource-state" id="resourceOverviewState" role="status" aria-live="polite">Loading current node readings…</span>
+        <button type="button" class="btn-x sm" id="refreshResourceOverview" aria-label="Refresh node capacity readings">
+            <i class="bi bi-arrow-clockwise"></i> Refresh
+        </button>
+    </div>
+    <div class="cx-body">
+        <div class="resource-overview-grid">
+            <div class="resource-overview-card">
+                <h3>Host CPU</h3>
+                <div class="resource-value" id="hostCpuTotal">Unknown</div>
+                <div class="resource-detail" id="hostCpuLoad">Current host load: Unknown</div>
+                <div class="resource-detail" id="guestCpuAllocated">Known guest configured vCPU: Unknown</div>
+            </div>
+            <div class="resource-overview-card">
+                <h3>Host memory</h3>
+                <div class="resource-value" id="hostMemoryAvailable">Unknown</div>
+                <div class="resource-detail" id="guestMemoryAllocated">Known guest configured memory: Unknown</div>
+                <div class="resource-detail">Memory fields below use MiB (1 GiB = 1,024 MiB).</div>
+            </div>
+            <div class="resource-overview-card">
+                <h3>Storage pools for this guest type</h3>
+                <ul class="resource-storage-list" id="nodeStoragePools" aria-live="polite">
+                    <li><span class="storage-name">Loading storage pools…</span><span class="storage-capacity">Reported capacity: Unknown</span></li>
+                </ul>
+            </div>
+        </div>
+        <details>
+            <summary>How to read these numbers</summary>
+            <p>Host CPU load and available memory are current node readings. Known guest allocation totals sum the guests returned by the read-only resource inventory; that inventory may be incomplete. When present, totals include stopped guests and this guest. They are configured allocations, not current usage, and vCPU or memory can be overcommitted. No remaining CPU or RAM capacity is inferred. Each storage is shown separately: reported free space is a point-in-time pool reading, is not reserved or guaranteed safe to allocate, and shared pools may also be used from other nodes. Storage totals are not added together.</p>
+        </details>
+    </div>
+</section>
 
 <div class="row justify-content-center">
     <div class="col-md-8">
@@ -193,18 +262,20 @@
                             </div>
                             <div class="col-md-6">
                                 <div class="field">
-                                    <label for="cores">Cores</label>
+                                    <label for="cores">Cores per socket</label>
                                     <input type="number" class="inp" id="cores" name="cores"
                                            min="1" max="128" value="{{ config.cores or 1 }}">
                                 </div>
                             </div>
                         </div>
+                        <div class="hint mt-2" id="cpuAllocationPreview" aria-live="polite">Total configured vCPU: Unknown</div>
                         {% else %}
                         <div class="field">
-                            <label for="cores">CPU Cores</label>
+                            <label for="cores">CPU cores (vCPU)</label>
                             <input type="number" class="inp" id="cores" name="cores"
                                    min="1" max="128" value="{{ config.cores or 1 }}">
                         </div>
+                        <div class="hint mt-2">Container CPU cores are a configured limit; the node can schedule more vCPU than physical CPU threads.</div>
                         {% endif %}
                     </div>
 
@@ -215,15 +286,16 @@
                         <div class="row">
                             <div class="col-md-6">
                                 <div class="field">
-                                    <label for="memory">Memory (MB)</label>
+                                    <label for="memory">Memory (MiB)</label>
                                     <input type="number" class="inp" id="memory" name="memory"
                                            min="64" max="4194304" step="64" value="{{ config.memory or 512 }}">
+                                    <div class="hint" id="memoryAllocationPreview">Configured guest memory: Unknown</div>
                                 </div>
                             </div>
                             {% if vm_type == 'lxc' %}
                             <div class="col-md-6">
                                 <div class="field">
-                                    <label for="swap">Swap (MB)</label>
+                                    <label for="swap">Swap (MiB)</label>
                                     <input type="number" class="inp" id="swap" name="swap"
                                            min="0" max="4194304" step="64" value="{{ config.swap or 512 }}">
                                 </div>
@@ -275,6 +347,7 @@
                             </button>
                         </div>
 
+                        <div class="hint mb-2">Add Disk creates a new disk or container mount point on selected storage. It does not resize an existing disk; use that disk’s Resize control to expand it.</div>
                         <div id="diskInterfaces">
                             <!-- Disk interfaces will be loaded here -->
                         </div>
@@ -356,14 +429,16 @@
                     </div>
 
                     <div class="divider my-4"></div>
+                    <div class="hint mb-3" role="note">This access is intended for CPU, memory, disks, and the storage pool you select. Startup, hostname, display, network, and advanced settings may need additional Proxmox permissions. Save sends only settings you changed.</div>
+                    <div class="hint mb-3" id="configSaveState" role="status" aria-live="polite">Loading the current configuration before enabling Save…</div>
                     <div class="d-flex gap-2 justify-content-end flex-wrap">
                         <button type="button" class="btn-x" onclick="window.history.back()">
                             <i class="bi bi-x-circle"></i> Cancel
                         </button>
-                        <button type="button" class="btn-x primary" id="saveBtn">
+                        <button type="button" class="btn-x primary" id="saveBtn" disabled>
                             <i class="bi bi-check-circle"></i> Save
                         </button>
-                        <button type="button" class="btn-x primary" id="saveCloseBtn">
+                        <button type="button" class="btn-x primary" id="saveCloseBtn" disabled>
                             <i class="bi bi-check2-square"></i> Save and Close
                         </button>
                     </div>
@@ -1405,6 +1480,338 @@ const node = '{{ node }}';
 const vmid = '{{ vm.vmid }}';
 const vmType = '{{ vm_type|default("qemu") }}';
 const vmName = '{{ vm.name | e }}';
+const RESOURCE_OVERVIEW_STALE_MS = 90000;
+let resourceOverviewLastUpdated = 0;
+let resourceOverviewRefreshing = false;
+let initialEditValues = null;
+let initialEditDigest = null;
+let addDiskRequestInFlight = false;
+
+function overviewNumber(value) {
+    if (value === null || value === undefined || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) && number >= 0 ? number : null;
+}
+
+function overviewGiB(bytes) {
+    const number = overviewNumber(bytes);
+    return number === null ? null : number / (1024 ** 3);
+}
+
+function displayGiB(value) {
+    return value === null ? 'Unknown' : `${value.toFixed(1)} GiB`;
+}
+
+function setOverviewValue(id, value) {
+    const element = document.getElementById(id);
+    if (!element) return;
+    element.textContent = value;
+    element.classList.toggle('unknown', value === 'Unknown' || value.startsWith('Unknown'));
+}
+
+function setStorageOverviewUnknown(message = 'Unknown') {
+    const list = document.getElementById('nodeStoragePools');
+    if (!list) return;
+    list.replaceChildren();
+    const row = document.createElement('li');
+    const name = document.createElement('span');
+    name.className = 'storage-name';
+    name.textContent = message;
+    const capacity = document.createElement('span');
+    capacity.className = 'storage-capacity unknown';
+    capacity.textContent = 'Reported pool capacity: Unknown';
+    row.append(name, capacity);
+    list.appendChild(row);
+}
+
+function setNodeOverviewUnknown() {
+    setOverviewValue('hostCpuTotal', 'Unknown');
+    setOverviewValue('hostCpuLoad', 'Current host load: Unknown');
+    setOverviewValue('guestCpuAllocated', 'Known guest configured vCPU: Unknown');
+    setOverviewValue('hostMemoryAvailable', 'Unknown');
+    setOverviewValue('guestMemoryAllocated', 'Known guest configured memory: Unknown');
+    setStorageOverviewUnknown();
+}
+
+function renderNodeStatus(status) {
+    const cpuCount = overviewNumber(status?.cpuinfo?.cpus);
+    setOverviewValue('hostCpuTotal', cpuCount === null ? 'Unknown' : `${Math.round(cpuCount)} logical CPU threads`);
+
+    const cpuLoad = overviewNumber(status?.cpu);
+    setOverviewValue('hostCpuLoad', cpuLoad !== null && cpuLoad <= 1
+        ? `Current host load: ${(cpuLoad * 100).toFixed(1)}%`
+        : 'Current host load: Unknown');
+
+    const memory = status?.memory || {};
+    const available = overviewGiB(memory.available);
+    const total = overviewGiB(memory.total);
+    const memoryText = available !== null && total !== null
+        ? `${displayGiB(available)} available now · ${displayGiB(total)} total`
+        : available !== null
+            ? `${displayGiB(available)} available now · total Unknown`
+            : total !== null
+                ? `Available now: Unknown · ${displayGiB(total)} total`
+                : 'Available now: Unknown · total Unknown';
+    setOverviewValue('hostMemoryAvailable', memoryText);
+}
+
+function renderGuestAllocations(resources) {
+    if (!Array.isArray(resources)) throw new Error('Invalid resources response');
+    const seen = new Set();
+    const guests = resources.filter(resource => resource && resource.node === node
+        && ['qemu', 'lxc'].includes(resource.type) && !resource.template).filter(resource => {
+        const key = `${resource.node}:${resource.vmid}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+
+    const currentGuestIncluded = guests.some(guest => String(guest.vmid) === String(vmid));
+    const allCpuKnown = currentGuestIncluded && guests.every(guest => overviewNumber(guest.maxcpu) !== null);
+    const cpuTotal = allCpuKnown ? guests.reduce((sum, guest) => sum + overviewNumber(guest.maxcpu), 0) : null;
+    setOverviewValue('guestCpuAllocated', cpuTotal === null
+        ? 'Known guest configured vCPU: Unknown'
+        : `Known guest configured vCPU: ${cpuTotal.toLocaleString()} across ${guests.length} guests`);
+
+    const allMemoryKnown = currentGuestIncluded && guests.every(guest => overviewNumber(guest.maxmem) !== null);
+    const memoryTotal = allMemoryKnown
+        ? guests.reduce((sum, guest) => sum + overviewNumber(guest.maxmem), 0) / (1024 ** 3)
+        : null;
+    setOverviewValue('guestMemoryAllocated', memoryTotal === null
+        ? 'Known guest configured memory: Unknown'
+        : `Known guest configured memory: ${memoryTotal.toFixed(1)} GiB across ${guests.length} guests`);
+}
+
+function renderStoragePools(storages) {
+    if (!Array.isArray(storages)) throw new Error('Invalid storage response');
+    const list = document.getElementById('nodeStoragePools');
+    if (!list) return;
+    list.replaceChildren();
+    if (storages.length === 0) {
+        setStorageOverviewUnknown('No eligible storage pools reported');
+        return;
+    }
+
+    storages.forEach(storage => {
+        const row = document.createElement('li');
+        const name = document.createElement('span');
+        name.className = 'storage-name';
+        name.textContent = typeof storage.storage === 'string' && storage.storage ? storage.storage : 'Unnamed storage';
+
+        const availableBytes = overviewNumber(storage.available_bytes);
+        const availableGiB = availableBytes !== null
+            ? availableBytes / (1024 ** 3)
+            : (overviewNumber(storage.available_gb) === null ? null : Number(storage.available_gb));
+        const totalGiB = overviewGiB(storage.total);
+        const capacity = document.createElement('span');
+        capacity.className = 'storage-capacity';
+        capacity.textContent = availableGiB !== null && totalGiB !== null
+            ? `${displayGiB(availableGiB)} reported free / ${displayGiB(totalGiB)} total`
+            : availableGiB !== null
+                ? `${displayGiB(availableGiB)} reported free · total Unknown`
+                : totalGiB !== null
+                    ? `Reported free space: Unknown · ${displayGiB(totalGiB)} total`
+                    : 'Reported free space: Unknown · total Unknown';
+        const permission = document.createElement('span');
+        permission.className = 'storage-permission';
+        if (storage.can_allocate === true) {
+            permission.textContent = 'Allocation permission: allowed';
+            permission.classList.add('allowed');
+        } else if (storage.can_allocate === false) {
+            permission.textContent = 'Allocation permission: not permitted';
+            permission.classList.add('denied');
+        } else {
+            permission.textContent = 'Allocation permission: unknown';
+            permission.classList.add('unknown');
+        }
+        row.append(name, capacity, permission);
+        list.appendChild(row);
+    });
+}
+
+async function fetchOverviewJson(url) {
+    const response = await fetch(url, { cache: 'no-store' });
+    let data;
+    try { data = await response.json(); }
+    catch (_) { throw new Error('Invalid response'); }
+    if (!response.ok || (data && data.error)) throw new Error('Request failed');
+    return data;
+}
+
+async function refreshNodeOverview() {
+    if (resourceOverviewRefreshing) return;
+    resourceOverviewRefreshing = true;
+    const state = document.getElementById('resourceOverviewState');
+    if (state) state.textContent = 'Refreshing current node readings…';
+    if (resourceOverviewLastUpdated && Date.now() - resourceOverviewLastUpdated > RESOURCE_OVERVIEW_STALE_MS) {
+        setNodeOverviewUnknown();
+    }
+
+    const [statusResult, resourcesResult, storageResult] = await Promise.allSettled([
+        fetchOverviewJson(`/api/node/${encodeURIComponent(node)}/status`),
+        fetchOverviewJson('/api/resources/by-node'),
+        fetchOverviewJson(`/api/node/${encodeURIComponent(node)}/storages?vm_type=${encodeURIComponent(vmType)}`),
+    ]);
+
+    if (statusResult.status === 'fulfilled' && statusResult.value && typeof statusResult.value === 'object') {
+        renderNodeStatus(statusResult.value);
+    } else {
+        setOverviewValue('hostCpuTotal', 'Unknown');
+        setOverviewValue('hostCpuLoad', 'Current host load: Unknown');
+        setOverviewValue('hostMemoryAvailable', 'Unknown');
+    }
+
+    if (resourcesResult.status === 'fulfilled') {
+        try {
+            const inventory = Array.isArray(resourcesResult.value) ? resourcesResult.value.find(item => item.node === node) : null;
+            if (!inventory || inventory.complete !== true || !Array.isArray(inventory.resources)) throw new Error('Incomplete inventory');
+            renderGuestAllocations(inventory.resources);
+        }
+        catch (_) {
+            setOverviewValue('guestCpuAllocated', 'Known guest configured vCPU: Unknown');
+            setOverviewValue('guestMemoryAllocated', 'Known guest configured memory: Unknown');
+        }
+    } else {
+        setOverviewValue('guestCpuAllocated', 'Known guest configured vCPU: Unknown');
+        setOverviewValue('guestMemoryAllocated', 'Known guest configured memory: Unknown');
+    }
+
+    if (storageResult.status === 'fulfilled') {
+        try { renderStoragePools(storageResult.value); }
+        catch (_) { setStorageOverviewUnknown(); }
+    } else {
+        setStorageOverviewUnknown();
+    }
+
+    resourceOverviewLastUpdated = Date.now();
+    const nodeInventory = resourcesResult.status === 'fulfilled' && Array.isArray(resourcesResult.value)
+        ? resourcesResult.value.find(item => item.node === node) : null;
+    const partial = [statusResult, resourcesResult, storageResult].some(result => result.status === 'rejected')
+        || !nodeInventory || nodeInventory.complete !== true;
+    if (state) {
+        const stamp = new Date(resourceOverviewLastUpdated).toLocaleTimeString();
+        state.textContent = partial ? `Some readings unavailable · checked ${stamp}` : `Current snapshot · updated ${stamp}`;
+    }
+    resourceOverviewRefreshing = false;
+}
+
+function updateAllocationPreviews() {
+    const cores = overviewNumber(document.getElementById('cores')?.value);
+    const sockets = overviewNumber(document.getElementById('sockets')?.value);
+    const cpuPreview = document.getElementById('cpuAllocationPreview');
+    if (cpuPreview) {
+        cpuPreview.textContent = cores !== null && sockets !== null
+            ? `Total configured vCPU: ${Math.round(cores * sockets)} (${Math.round(sockets)} socket${sockets === 1 ? '' : 's'} × ${Math.round(cores)} cores)`
+            : 'Total configured vCPU: Unknown';
+    }
+
+    const memoryMiB = overviewNumber(document.getElementById('memory')?.value);
+    const memoryPreview = document.getElementById('memoryAllocationPreview');
+    if (memoryPreview) {
+        memoryPreview.textContent = memoryMiB === null
+            ? 'Configured guest memory: Unknown'
+            : `Configured guest memory: ${memoryMiB.toLocaleString()} MiB (${(memoryMiB / 1024).toFixed(1)} GiB)`;
+    }
+}
+
+const EDITABLE_CONFIG_FIELD_IDS = ['cores', 'memory', 'autostart', 'hostname', 'swap', 'cpu_type', 'sockets', 'vga_type', 'vga_memory'];
+
+function setConfigEditingEnabled(enabled) {
+    EDITABLE_CONFIG_FIELD_IDS.forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.disabled = !enabled;
+    });
+    ['saveBtn', 'saveCloseBtn'].forEach(id => {
+        const button = document.getElementById(id);
+        if (button) button.disabled = !enabled;
+    });
+}
+
+function currentEditValues() {
+    const values = {};
+    const numberValue = id => {
+        const input = document.getElementById(id);
+        if (!input) return undefined;
+        return input.value.trim() === '' ? null : Number(input.value);
+    };
+
+    const cores = numberValue('cores');
+    const memory = numberValue('memory');
+    const autostart = document.getElementById('autostart');
+    if (cores !== undefined) values.cores = cores;
+    if (memory !== undefined) values.memory = memory;
+    if (autostart) values.onboot = autostart.checked ? 1 : 0;
+
+    const hostname = document.getElementById('hostname');
+    const swap = numberValue('swap');
+    if (hostname) values.hostname = hostname.value;
+    if (swap !== undefined) values.swap = swap;
+
+    const cpuType = document.getElementById('cpu_type');
+    const sockets = numberValue('sockets');
+    if (cpuType) values.cpu = cpuType.value;
+    if (sockets !== undefined) values.sockets = sockets;
+
+    const vgaType = document.getElementById('vga_type');
+    const vgaMemory = document.getElementById('vga_memory');
+    if (vgaType) {
+        values.vga = vgaType.value === 'serial0' || vgaType.value === 'none' || !vgaMemory?.value
+            ? vgaType.value
+            : `${vgaType.value},memory=${vgaMemory.value}`;
+    }
+    return values;
+}
+
+function applyConfigurationSnapshot(data) {
+    const numericDefaults = {
+        cores: { fallback: 1, minimum: 1 },
+        memory: { fallback: 512, minimum: 64 },
+        sockets: { fallback: 1, minimum: 1 },
+        swap: { fallback: 512, minimum: 0 },
+    };
+    Object.entries(numericDefaults).forEach(([key, rule]) => {
+        const input = document.getElementById(key);
+        if (!input) return;
+        const value = Number(data[key]);
+        input.value = Number.isSafeInteger(value) && value >= rule.minimum ? value : rule.fallback;
+    });
+
+    const autostart = document.getElementById('autostart');
+    if (autostart) autostart.checked = Number(data.onboot) === 1;
+    const hostname = document.getElementById('hostname');
+    if (hostname) hostname.value = data.hostname === undefined || data.hostname === null ? '' : String(data.hostname);
+
+    const selectValue = (select, value) => {
+        if (!select) return;
+        const desired = value === undefined || value === null || value === ''
+            ? (select.options[0]?.value || '')
+            : String(value);
+        if (!Array.from(select.options).some(option => option.value === desired)) {
+            const option = document.createElement('option');
+            option.value = desired;
+            option.textContent = `Current value (${desired})`;
+            select.appendChild(option);
+        }
+        select.value = desired;
+    };
+
+    selectValue(document.getElementById('cpu_type'), data.cpu);
+
+    const vgaSelect = document.getElementById('vga_type');
+    const vgaMemoryInput = document.getElementById('vga_memory');
+    const vgaParts = typeof data.vga === 'string' && data.vga ? data.vga.split(',') : [];
+    const vgaType = vgaParts.length ? vgaParts[0] : undefined;
+    selectValue(vgaSelect, vgaType);
+    if (vgaMemoryInput) {
+        const memoryPart = vgaParts.find(part => part.startsWith('memory='));
+        const memoryValue = memoryPart ? Number(memoryPart.slice('memory='.length)) : 16;
+        vgaMemoryInput.value = Number.isSafeInteger(memoryValue) && memoryValue >= 4 ? memoryValue : 16;
+    }
+    const vgaMemoryContainer = document.getElementById('vgaMemoryContainer');
+    if (vgaMemoryContainer && vgaSelect) {
+        vgaMemoryContainer.style.display = vgaSelect.value === 'serial0' || vgaSelect.value === 'none' ? 'none' : 'block';
+    }
+}
 
 // Shared VM config fetch. On page load several loaders each need the config;
 // deduping the concurrent burst into a single in-flight request avoids firing
@@ -1518,10 +1925,14 @@ function showNotification(message, type = 'info') {
     notification.style.top = '20px';
     notification.style.right = '20px';
     notification.style.zIndex = '10000';
-    notification.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
+    notification.setAttribute('role', 'alert');
+    notification.appendChild(document.createTextNode(String(message ?? '')));
+    const closeButton = document.createElement('button');
+    closeButton.type = 'button';
+    closeButton.className = 'btn-close';
+    closeButton.setAttribute('data-bs-dismiss', 'alert');
+    closeButton.setAttribute('aria-label', 'Close');
+    notification.appendChild(closeButton);
     
     document.body.appendChild(notification);
     
@@ -2085,7 +2496,7 @@ function createDiskInterfaceCard(disk) {
         }
     }
 
-    // Convert size to GB for display
+    // Convert size to GiB for display
     let sizeGB = size;
     if (size.endsWith('G')) {
         sizeGB = parseInt(size.replace('G', ''));
@@ -2134,7 +2545,7 @@ function createDiskInterfaceCard(disk) {
                     <div><strong>${size || 'Unknown'}</strong></div>
                 </div>
                 <div class="col-md-4">
-                    <label for="resize_${disk.key}" class="form-label small mb-1">Resize to (GB)</label>
+                    <label for="resize_${disk.key}" class="form-label small mb-1">Resize to (GiB)</label>
                     <input type="number" class="form-control form-control-sm"
                            id="resize_${disk.key}"
                            min="${sizeGB || 1}"
@@ -2163,14 +2574,19 @@ function createDiskInterfaceCard(disk) {
 
 function resizeDisk(diskKey) {
     const newSizeInput = document.getElementById(`resize_${diskKey}`);
-    const newSize = parseInt(newSizeInput.value);
-    
-    if (!newSize || newSize <= 0) {
-        showNotification('Please enter a valid size', 'warning');
+    if (!newSizeInput) {
+        showNotification('Could not find the disk size field', 'warning');
+        return;
+    }
+
+    const newSize = Number(newSizeInput.value);
+    if (!newSizeInput.checkValidity() || !Number.isSafeInteger(newSize) || newSize <= 0) {
+        newSizeInput.reportValidity();
+        showNotification('Enter a whole-number resize size in GiB, at least the current disk size.', 'warning');
         return;
     }
     
-    if (!confirm(`Resize disk ${diskKey} to ${newSize}GB? This action cannot be undone.`)) {
+    if (!confirm(`Resize disk ${diskKey} to ${newSize} GiB? This action cannot be undone.`)) {
         return;
     }
     
@@ -2192,7 +2608,7 @@ function resizeDisk(diskKey) {
     .then(result => {
         console.log('Resize result:', result);
         if (result.success) {
-            showNotification(`Disk ${diskKey} resized to ${newSize}GB successfully`, 'success');
+            showNotification(`Disk ${diskKey} resized to ${newSize} GiB successfully`, 'success');
             loadDiskInterfaces(); // Reload disk list
         } else {
             showNotification(result.error || 'Failed to resize disk', 'error');
@@ -2235,14 +2651,10 @@ function showAddDiskModal() {
                 showNotification('Error loading storages: ' + data.error, 'error');
                 return;
             }
-            if (!data.length) {
+            if (!Array.isArray(data) || !data.length) {
                 showNotification('No suitable storage available on this node', 'warning');
                 return;
             }
-
-            const storageOptions = data.map(s =>
-                `<option value="${s.storage}">${s.storage} (${s.available_gb} GB free)</option>`
-            ).join('');
 
             const busField = vmType === 'lxc' ? `
                 <div class="mb-3">
@@ -2288,19 +2700,22 @@ function showAddDiskModal() {
 
             const modalHtml = `
                 <div class="modal fade" id="addDiskModal" tabindex="-1">
-                    <div class="modal-dialog">
+                    <div class="modal-dialog modal-dialog-centered modal-fullscreen-sm-down">
                         <div class="modal-content">
                             <div class="modal-header">
-                                <h5 class="modal-title">Add Disk</h5>
+                                <h5 class="modal-title">Add a new ${vmType === 'lxc' ? 'container mount point' : 'virtual disk'}</h5>
                                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                             </div>
                             <div class="modal-body">
+                                <div class="alert alert-info small" role="note">
+                                    This creates a new disk or mount point. It does not resize an existing disk; use that disk's Resize control to expand it. The new disk consumes space from the storage you select. Reported pool free space is a point-in-time reading, is not reserved, and shared storage may also be used by other nodes.
+                                </div>
                                 <div class="mb-3">
-                                    <label for="newDiskStorage" class="form-label">Storage</label>
-                                    <select class="form-select" id="newDiskStorage">
-                                        <option value="">Select storage...</option>
-                                        ${storageOptions}
+                                    <label for="newDiskStorage" class="form-label">Choose storage pool <span class="text-danger">(required)</span></label>
+                                    <select class="form-select" id="newDiskStorage" required>
+                                        <option value="" selected disabled>Select a storage pool…</option>
                                     </select>
+                                    <div class="form-text" id="newDiskStorageInfo" aria-live="polite">Choose a pool to see its reported capacity.</div>
                                 </div>
                                 <div class="mb-3">
                                     <label for="newDiskSize" class="form-label">Size (GiB)</label>
@@ -2330,6 +2745,50 @@ function showAddDiskModal() {
 
             document.body.insertAdjacentHTML('beforeend', modalHtml);
 
+            const storageSelect = document.getElementById('newDiskStorage');
+            const storageInfo = document.getElementById('newDiskStorageInfo');
+            let allocatableCount = 0;
+            const formatCapacity = storage => {
+                const availableBytes = overviewNumber(storage.available_bytes);
+                const availableGiB = availableBytes !== null
+                    ? availableBytes / (1024 ** 3)
+                    : (overviewNumber(storage.available_gb) === null ? null : Number(storage.available_gb));
+                const totalGiB = overviewGiB(storage.total);
+                if (availableGiB === null) return totalGiB === null
+                    ? 'reported free space Unknown · total Unknown'
+                    : `reported free space Unknown · ${displayGiB(totalGiB)} total`;
+                return totalGiB === null
+                    ? `${displayGiB(availableGiB)} reported free; total Unknown`
+                    : `${displayGiB(availableGiB)} reported free of ${displayGiB(totalGiB)} total`;
+            };
+            data.forEach(storage => {
+                if (typeof storage.storage !== 'string' || !storage.storage) return;
+                const option = document.createElement('option');
+                option.value = storage.storage;
+                const canAllocate = storage.can_allocate === true;
+                option.disabled = !canAllocate;
+                option.dataset.canAllocate = canAllocate ? 'true' : 'false';
+                if (canAllocate) allocatableCount += 1;
+                const permissionText = canAllocate
+                    ? 'allocation allowed'
+                    : storage.can_allocate === false ? 'not permitted' : 'permission unknown';
+                option.textContent = `${storage.storage} · ${formatCapacity(storage)} · ${permissionText}`;
+                storageSelect.appendChild(option);
+            });
+            const addButton = document.getElementById('addDiskSubmitBtn');
+            addButton.dataset.allocatable = allocatableCount > 0 ? 'true' : 'false';
+            addButton.disabled = allocatableCount === 0 || addDiskRequestInFlight;
+            if (addDiskRequestInFlight) addButton.setAttribute('aria-busy', 'true');
+            if (allocatableCount === 0) {
+                storageInfo.textContent = 'No pool is confirmed as allocatable with your access. Pools with denied or unknown permission are disabled.';
+            }
+            storageSelect.addEventListener('change', () => {
+                const selected = data.find(storage => storage.storage === storageSelect.value);
+                storageInfo.textContent = selected
+                    ? `${selected.storage}: ${formatCapacity(selected)}. Allocation permission: ${selected.can_allocate === true ? 'allowed' : selected.can_allocate === false ? 'not permitted' : 'unknown'}. Free space is not a reservation or a guarantee of safe capacity.`
+                    : 'Choose a pool to see its reported capacity.';
+            });
+
             const modal = new bootstrap.Modal(document.getElementById('addDiskModal'));
             modal.show();
 
@@ -2342,15 +2801,23 @@ function showAddDiskModal() {
 }
 
 function addDisk() {
-    const storage = document.getElementById('newDiskStorage').value;
-    const sizeGb = parseInt(document.getElementById('newDiskSize').value);
+    if (addDiskRequestInFlight) return;
+    const storageSelect = document.getElementById('newDiskStorage');
+    const storage = storageSelect.value;
+    const sizeInput = document.getElementById('newDiskSize');
+    const sizeGb = Number(sizeInput.value);
 
     if (!storage) {
         showNotification('Please select a storage', 'warning');
         return;
     }
-    if (!sizeGb || sizeGb <= 0) {
-        showNotification('Please enter a valid size', 'warning');
+    if (storageSelect.selectedOptions[0]?.dataset.canAllocate !== 'true') {
+        showNotification('This storage is not confirmed as allocatable for your account', 'warning');
+        return;
+    }
+    if (!sizeInput.checkValidity() || !Number.isSafeInteger(sizeGb) || sizeGb <= 0) {
+        sizeInput.reportValidity();
+        showNotification('Enter a whole-number disk size of at least 1 GiB.', 'warning');
         return;
     }
 
@@ -2378,28 +2845,52 @@ function addDisk() {
         }
     }
 
+    const submitButton = document.getElementById('addDiskSubmitBtn');
+    const modalElement = document.getElementById('addDiskModal');
+    const modalInstance = modalElement ? bootstrap.Modal.getInstance(modalElement) : null;
+    addDiskRequestInFlight = true;
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.setAttribute('aria-busy', 'true');
+    }
+    let addDiskSucceeded = false;
+
     fetch(`/api/vm/${node}/${vmid}/disks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
     })
-    .then(response => response.json())
+    .then(response => response.json().catch(() => ({})).then(result => {
+        const body = result && typeof result === 'object' ? result : {};
+        if (!response.ok) {
+            throw new Error(body.error || body.message || `Request failed (HTTP ${response.status})`);
+        }
+        return body;
+    }))
     .then(result => {
-        if (result.success) {
-            showNotification(result.message || 'Disk added', 'success');
-            loadDiskInterfaces();
-
-            const modal = bootstrap.Modal.getInstance(document.getElementById('addDiskModal'));
-            if (modal) {
-                modal.hide();
-            }
-        } else {
-            showNotification(result.error || 'Failed to add disk', 'error');
+        if (!result.success) throw new Error(result.error || 'Failed to add disk');
+        addDiskSucceeded = true;
+        showNotification(result.message || 'Disk added', 'success');
+        loadDiskInterfaces();
+        if (modalElement?.isConnected) {
+            const activeModal = modalInstance || bootstrap.Modal.getOrCreateInstance(modalElement);
+            activeModal.hide();
         }
     })
     .catch(error => {
         console.error('Error adding disk:', error);
-        showNotification('Network error while adding disk: ' + error.message, 'error');
+        const message = error.message === 'Failed to fetch'
+            ? 'Network error while adding disk'
+            : error.message || 'Failed to add disk';
+        showNotification(message, 'error');
+    })
+    .finally(() => {
+        addDiskRequestInFlight = false;
+        const activeButton = document.getElementById('addDiskSubmitBtn');
+        if (activeButton && (!addDiskSucceeded || activeButton !== submitButton)) {
+            activeButton.disabled = activeButton.dataset.allocatable !== 'true';
+            activeButton.removeAttribute('aria-busy');
+        }
     });
 }
 
@@ -3098,6 +3589,30 @@ function saveBootOrder() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    setConfigEditingEnabled(false);
+    updateAllocationPreviews();
+    refreshNodeOverview();
+    document.getElementById('refreshResourceOverview').addEventListener('click', refreshNodeOverview);
+    window.setInterval(() => {
+        if (resourceOverviewLastUpdated && Date.now() - resourceOverviewLastUpdated > RESOURCE_OVERVIEW_STALE_MS) {
+            setNodeOverviewUnknown();
+            const state = document.getElementById('resourceOverviewState');
+            if (state) state.textContent = 'Node readings are stale and shown as unknown.';
+        }
+        if (!document.hidden && (!resourceOverviewLastUpdated || Date.now() - resourceOverviewLastUpdated > 60000)) {
+            refreshNodeOverview();
+        }
+    }, 30000);
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && (!resourceOverviewLastUpdated || Date.now() - resourceOverviewLastUpdated > 60000)) {
+            refreshNodeOverview();
+        }
+    });
+    ['cores', 'sockets', 'memory'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.addEventListener('input', updateAllocationPreviews);
+    });
+
     // Load current configuration
     loadVMConfiguration();
     loadNetworkInterfaces();
@@ -3135,57 +3650,23 @@ document.addEventListener('DOMContentLoaded', function() {
         getVmConfig()
             .then(data => {
                 if (data.error) {
-                    showNotification('Error loading VM configuration: ' + data.error, 'error');
-                    return;
+                    throw new Error(data.error);
                 }
-
-                // Populate common form fields
-                document.getElementById('autostart').checked = (data.onboot === 1);
-
-                if (vmType === 'lxc') {
-                    // LXC-specific fields
-                    const hostnameInput = document.getElementById('hostname');
-                    if (hostnameInput && data.hostname) {
-                        hostnameInput.value = data.hostname;
-                    }
-
-                    const swapInput = document.getElementById('swap');
-                    if (swapInput && data.swap !== undefined) {
-                        swapInput.value = data.swap;
-                    }
-                } else {
-                    // QEMU-specific fields
-                    if (data.cpu) {
-                        const cpuTypeSelect = document.getElementById('cpu_type');
-                        if (cpuTypeSelect) {
-                            cpuTypeSelect.value = data.cpu;
-                        }
-                    }
-
-                    // Load display configuration (QEMU only)
-                    const vgaSelect = document.getElementById('vga_type');
-                    const vgaMemoryInput = document.getElementById('vga_memory');
-                    if (vgaSelect && data.vga) {
-                        // Parse vga setting - can be "type" or "type,memory=XX"
-                        const vgaParts = data.vga.split(',');
-                        const vgaType = vgaParts[0];
-                        vgaSelect.value = vgaType;
-
-                        // Extract memory if present
-                        if (vgaMemoryInput) {
-                            const memoryPart = vgaParts.find(p => p.startsWith('memory='));
-                            if (memoryPart) {
-                                vgaMemoryInput.value = memoryPart.replace('memory=', '');
-                            }
-                        }
-
-                        updateVgaMemoryVisibility(vgaType);
-                    }
-                }
+                applyConfigurationSnapshot(data);
+                initialEditValues = currentEditValues();
+                initialEditDigest = typeof data.digest === 'string' && data.digest ? data.digest : null;
+                updateAllocationPreviews();
+                setConfigEditingEnabled(true);
+                const saveState = document.getElementById('configSaveState');
+                if (saveState) saveState.textContent = 'Configuration loaded. Save sends only fields you change.';
             })
             .catch(error => {
                 console.error('Error loading VM configuration:', error);
                 showNotification('Failed to load VM configuration', 'error');
+                initialEditValues = null;
+                setConfigEditingEnabled(false);
+                const saveState = document.getElementById('configSaveState');
+                if (saveState) saveState.textContent = 'Current configuration could not be loaded. Save is disabled to prevent overwriting unknown values.';
             });
     }
 
@@ -3204,56 +3685,48 @@ document.addEventListener('DOMContentLoaded', function() {
     
     
     function saveConfiguration(redirectAfterSave = false) {
-        // Show loading overlay
+        if (!initialEditValues) {
+            showNotification('The current configuration is not loaded. Reload the page before saving.', 'warning');
+            return;
+        }
+
+        const current = currentEditValues();
+        const formData = {};
+        const inputIds = {
+            cores: 'cores', memory: 'memory', onboot: 'autostart', hostname: 'hostname',
+            swap: 'swap', cpu: 'cpu_type', sockets: 'sockets', vga: 'vga_type',
+        };
+        let invalidInput = false;
+        Object.entries(current).forEach(([key, value]) => {
+            if (!Object.prototype.hasOwnProperty.call(initialEditValues, key) || value === initialEditValues[key]) return;
+            const input = document.getElementById(inputIds[key]);
+            if (['cores', 'memory', 'swap', 'sockets'].includes(key) && value === null) {
+                if (input) {
+                    input.focus();
+                    input.reportValidity();
+                }
+                invalidInput = true;
+            } else if (input && !input.checkValidity()) {
+                input.reportValidity();
+                invalidInput = true;
+            }
+            formData[key] = value;
+        });
+        if (invalidInput) return;
+
+        if (Object.keys(formData).length === 0) {
+            showNotification('No configuration fields have changed.', 'info');
+            if (redirectAfterSave) window.location.href = `/vm/${node}/${vmid}`;
+            return;
+        }
+        if (initialEditDigest) formData.digest = initialEditDigest;
+
+        const saveState = document.getElementById('configSaveState');
+        if (saveState) saveState.textContent = 'Saving changed configuration fields…';
+        setConfigEditingEnabled(false);
         document.getElementById('loadingOverlay').classList.remove('d-none');
         document.getElementById('loadingOverlay').classList.add('d-flex');
 
-        // Collect form data - common fields
-        const formData = {
-            cores: parseInt(document.getElementById('cores').value),
-            memory: parseInt(document.getElementById('memory').value),
-            onboot: document.getElementById('autostart').checked ? 1 : 0
-        };
-
-        if (vmType === 'lxc') {
-            // LXC-specific fields
-            const hostnameInput = document.getElementById('hostname');
-            if (hostnameInput && hostnameInput.value) {
-                formData.hostname = hostnameInput.value;
-            }
-
-            const swapInput = document.getElementById('swap');
-            if (swapInput) {
-                formData.swap = parseInt(swapInput.value) || 0;
-            }
-        } else {
-            // QEMU-specific fields
-            const cpuTypeSelect = document.getElementById('cpu_type');
-            if (cpuTypeSelect) {
-                formData.cpu = cpuTypeSelect.value;
-            }
-
-            const socketsInput = document.getElementById('sockets');
-            if (socketsInput) {
-                formData.sockets = parseInt(socketsInput.value);
-            }
-        }
-
-        // Add VGA configuration (QEMU VMs only)
-        const vgaSelect = document.getElementById('vga_type');
-        const vgaMemoryInput = document.getElementById('vga_memory');
-        if (vgaSelect) {
-            const vgaType = vgaSelect.value;
-            if (vgaType === 'serial0' || vgaType === 'none') {
-                formData.vga = vgaType;
-            } else if (vgaMemoryInput && vgaMemoryInput.value) {
-                formData.vga = `${vgaType},memory=${vgaMemoryInput.value}`;
-            } else {
-                formData.vga = vgaType;
-            }
-        }
-
-        // Send API request
         fetch(`/api/vm/${node}/${vmid}/config`, {
             method: 'PUT',
             headers: {
@@ -3261,9 +3734,21 @@ document.addEventListener('DOMContentLoaded', function() {
             },
             body: JSON.stringify(formData)
         })
-        .then(response => response.json())
+        .then(response => {
+            return response.json().catch(() => ({})).then(data => {
+                const body = data && typeof data === 'object' ? data : {};
+                if (!response.ok) {
+                    const serverMessage = typeof body.error === 'string' && body.error.trim()
+                        ? body.error
+                        : typeof body.message === 'string' && body.message.trim()
+                            ? body.message
+                            : `Request failed (HTTP ${response.status})`;
+                    throw new Error(serverMessage);
+                }
+                return body;
+            });
+        })
         .then(data => {
-            // Hide loading overlay
             document.getElementById('loadingOverlay').classList.remove('d-flex');
             document.getElementById('loadingOverlay').classList.add('d-none');
 
@@ -3271,22 +3756,37 @@ document.addEventListener('DOMContentLoaded', function() {
                 showNotification('VM configuration updated successfully', 'success');
 
                 if (redirectAfterSave) {
-                    // Redirect back to VM details after brief delay
                     setTimeout(() => {
                         window.location.href = `/vm/${node}/${vmid}`;
                     }, 1000);
+                } else {
+                    getVmConfig().then(freshConfig => {
+                        if (freshConfig.error) throw new Error(freshConfig.error);
+                        applyConfigurationSnapshot(freshConfig);
+                        initialEditValues = currentEditValues();
+                        initialEditDigest = typeof freshConfig.digest === 'string' && freshConfig.digest ? freshConfig.digest : null;
+                        setConfigEditingEnabled(true);
+                        if (saveState) saveState.textContent = 'Saved. Current configuration reloaded; only later changes will be sent.';
+                    }).catch(error => {
+                        console.error('Error refreshing configuration after save:', error);
+                        initialEditValues = null;
+                        setConfigEditingEnabled(false);
+                        if (saveState) saveState.textContent = 'Saved, but the current configuration could not be reloaded. Reload the page before another change.';
+                    });
                 }
             } else {
                 showNotification(data.error || 'Failed to update VM configuration', 'error');
+                setConfigEditingEnabled(true);
+                if (saveState) saveState.textContent = 'Save failed. Your edited values remain on the form.';
             }
         })
         .catch(error => {
-            // Hide loading overlay
             document.getElementById('loadingOverlay').classList.remove('d-flex');
             document.getElementById('loadingOverlay').classList.add('d-none');
-            
             console.error('Error updating VM configuration:', error);
-            showNotification('Network error while updating configuration', 'error');
+            showNotification(error.message === 'Failed to fetch' ? 'Network error while updating configuration' : error.message, 'error');
+            setConfigEditingEnabled(true);
+            if (saveState) saveState.textContent = 'Save failed. Your edited values remain on the form.';
         });
     }
     

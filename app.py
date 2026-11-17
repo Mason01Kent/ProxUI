@@ -4728,6 +4728,66 @@ def api_resources():
     return jsonify(resources)
 
 
+@app.route("/api/resources/by-node")
+def api_resources_by_node():
+    """Return visible guest inventory per node and whether both queries worked."""
+    inventory = []
+    seen_nodes = set()
+
+    for node_info in list(cluster_nodes):
+        node_name = node_info.get("name")
+        if not isinstance(node_name, str) or not node_name or node_name in seen_nodes:
+            continue
+        seen_nodes.add(node_name)
+
+        resources = []
+        complete = True
+        try:
+            proxmox = get_proxmox_connection(node_name, auto_renew=True)
+        except Exception:
+            proxmox = None
+
+        if not proxmox:
+            complete = False
+        else:
+            for guest_type in ("qemu", "lxc"):
+                try:
+                    guests = getattr(proxmox.nodes(node_name), guest_type).get()
+                    if not isinstance(guests, list):
+                        complete = False
+                        continue
+
+                    for guest in guests:
+                        if not isinstance(guest, dict) or guest.get("vmid") is None:
+                            complete = False
+                            continue
+
+                        template_value = guest.get("template", 0)
+                        is_template = template_value in (True, 1, "1", "true")
+                        resources.append(
+                            {
+                                "node": node_name,
+                                "type": guest_type,
+                                "vmid": guest["vmid"],
+                                "name": guest.get("name"),
+                                "status": guest.get("status"),
+                                "maxcpu": guest.get("maxcpu"),
+                                "maxmem": guest.get("maxmem"),
+                                "template": is_template,
+                            }
+                        )
+                except Exception:
+                    # Keep any successfully read guest family, but indicate that
+                    # this node's inventory is incomplete.
+                    complete = False
+
+        inventory.append(
+            {"node": node_name, "complete": complete, "resources": resources}
+        )
+
+    return jsonify(inventory)
+
+
 @app.route("/api/node/<node>/status")
 def api_node_status(node):
     """API endpoint to get specific node status"""
@@ -4768,26 +4828,48 @@ def api_node_storages(node):
                     is_suitable = True
 
                 if is_suitable:
-                    # Calculate available space
+                    # Ask PVE for this token's effective storage rights. The
+                    # response may be unavailable, which is not a denial.
+                    storage["can_allocate"] = None
+                    storage_id = storage.get("storage")
+                    if isinstance(storage_id, str) and storage_id:
+                        permission_path = f"/storage/{storage_id}"
+                        try:
+                            rights = proxmox.access.permissions.get(path=permission_path)
+                            if isinstance(rights, dict) and isinstance(
+                                rights.get(permission_path), dict
+                            ):
+                                storage["can_allocate"] = bool(
+                                    rights[permission_path].get("Datastore.AllocateSpace")
+                                )
+                        except Exception:
+                            pass  # Unknown is distinct from an explicit denial.
+
+                    # PVE's avail accounts for filesystem reservations; total-used
+                    # can overstate the space available to this storage.
+                    available = storage.get("avail")
+                    if (
+                        isinstance(available, (int, float))
+                        and not isinstance(available, bool)
+                        and math.isfinite(available)
+                        and available >= 0
+                    ):
+                        storage["available_bytes"] = available
+                        storage["available_gb"] = round(available / (1024**3), 2)
+                    else:
+                        storage.pop("available_bytes", None)
+                        storage.pop("available_gb", None)
                     if storage.get("total") and storage.get("total") > 0:
-                        storage["available_bytes"] = storage.get(
-                            "total", 0
-                        ) - storage.get("used", 0)
-                        storage["available_gb"] = round(
-                            storage["available_bytes"] / (1024**3), 2
-                        )
                         storage["used_percent"] = (
                             storage.get("used", 0) / storage["total"]
                         ) * 100
                     else:
-                        storage["available_bytes"] = 0
-                        storage["available_gb"] = 0
                         storage["used_percent"] = 0
 
                     vm_storages.append(storage)
 
         # Sort by available space (descending - most space first)
-        vm_storages.sort(key=lambda x: x["available_bytes"], reverse=True)
+        vm_storages.sort(key=lambda x: x.get("available_bytes", -1), reverse=True)
         return jsonify(vm_storages)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -5966,6 +6048,13 @@ def api_vm_config(node, vmid):
             # Build update parameters
             params = {}
 
+            # PVE uses the configuration digest to reject stale edits.
+            if "digest" in data:
+                digest = data["digest"]
+                if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", digest):
+                    return jsonify({"error": "Invalid configuration digest"}), 400
+                params["digest"] = digest
+
             # CPU configuration
             if "cpu" in data:
                 params["cpu"] = data["cpu"]
@@ -5995,8 +6084,6 @@ def api_vm_config(node, vmid):
                 params["vga"] = data["vga"]
 
             # Network interfaces (net0, net1, etc.)
-            import re
-
             delete_params = []
             for key, value in data.items():
                 if key.startswith("net") and re.match(r"^net\d+$", key):
@@ -6934,9 +7021,20 @@ def api_vm_add_disk(node, vmid):
         if not storage:
             return jsonify({"error": "storage is required"}), 400
 
+        raw_size_gb = data.get("size_gb")
+        if isinstance(raw_size_gb, bool):
+            return jsonify({"error": "size_gb must be an integer"}), 400
         try:
-            size_gb = int(data.get("size_gb"))
-        except (TypeError, ValueError):
+            size_gb = int(raw_size_gb)
+        except (TypeError, ValueError, OverflowError):
+            return jsonify({"error": "size_gb must be an integer"}), 400
+        if isinstance(raw_size_gb, float) and (
+            not math.isfinite(raw_size_gb) or raw_size_gb != size_gb
+        ):
+            return jsonify({"error": "size_gb must be an integer"}), 400
+        if isinstance(raw_size_gb, str) and not re.fullmatch(
+            r"[+-]?[0-9]+", raw_size_gb.strip()
+        ):
             return jsonify({"error": "size_gb must be an integer"}), 400
         if size_gb <= 0:
             return jsonify({"error": "size_gb must be greater than 0"}), 400
@@ -6963,7 +7061,11 @@ def api_vm_add_disk(node, vmid):
                 backup=data.get("backup", True),
             )
             key = f"{bus}{idx}"
-            proxmox.nodes(node).qemu(vmid).config.put(**{key: value})
+            config_params = {key: value}
+            digest = config.get("digest") if isinstance(config, dict) else None
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{40}", digest):
+                config_params["digest"] = digest
+            proxmox.nodes(node).qemu(vmid).config.put(**config_params)
         else:
             path = (data.get("path") or "").strip()
             if not path.startswith("/"):
@@ -6980,7 +7082,11 @@ def api_vm_add_disk(node, vmid):
                 storage, size_gb, path, backup=data.get("backup", True)
             )
             key = f"mp{idx}"
-            proxmox.nodes(node).lxc(vmid).config.put(**{key: value})
+            config_params = {key: value}
+            digest = config.get("digest") if isinstance(config, dict) else None
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-fA-F]{40}", digest):
+                config_params["digest"] = digest
+            proxmox.nodes(node).lxc(vmid).config.put(**config_params)
 
         return jsonify(
             {

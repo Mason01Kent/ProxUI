@@ -11,6 +11,20 @@
     <a href="{{ url_for('create_vm') }}" class="btn-x primary"><i class="bi bi-plus-lg"></i> Create</a>
 </div>
 
+<section class="card-x mb-3" aria-labelledby="resource-overview-title">
+    <div class="cx-head d-flex flex-wrap">
+        <div class="me-auto">
+            <div class="cx-title" id="resource-overview-title">Server capacity</div>
+            <div class="text-faint" style="font-size:12px">Host capacity and guest allocations at the last refresh</div>
+        </div>
+        <button type="button" class="btn-x sm" id="resource-overview-refresh">Refresh</button>
+    </div>
+    <div class="cx-body">
+        <div id="resource-overview" aria-live="polite">Loading server capacity…</div>
+        <div class="text-faint mt-2" style="font-size:12px">Known allocations include stopped guests and may be incomplete if inventory is unavailable. They are not current host use; CPUs can be shared.</div>
+    </div>
+</section>
+
 <div class="card-x" x-data="{ search: '' }">
     <div class="cx-head guest-list-header">
         <div class="filter-bar w-100">
@@ -127,4 +141,6 @@
 </div>
 {% endblock %}
 
-{% block scripts %}{% endblock %}
+{% block scripts %}
+<script defer src="{{ url_for('static', filename='js/resource-overview.js') }}"></script>
+{% endblock %}

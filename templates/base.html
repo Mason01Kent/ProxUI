@@ -78,6 +78,7 @@
       if (window.Alpine) registerChrome();
       else document.addEventListener('alpine:init', registerChrome);
     </script>
+    {% block extra_head %}{% endblock %}
 </head>
 <body>
     {#

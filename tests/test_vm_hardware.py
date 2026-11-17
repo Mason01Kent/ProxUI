@@ -165,6 +165,66 @@ class TestHardwareEndpoints(unittest.TestCase):
         self.assertEqual(data["key"], "scsi1")
         qemu_mock.config.put.assert_called_once_with(scsi1="local-lvm:20")
 
+    def test_add_disk_qemu_forwards_config_digest(self):
+        digest = "a" * 40
+        qemu_mock = self._mock_qemu({"digest": digest})
+
+        resp = self.client.post(
+            "/api/vm/test-node/100/disks",
+            json={"storage": "local-lvm", "size_gb": 20, "bus": "scsi"},
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        qemu_mock.config.put.assert_called_once_with(
+            scsi0="local-lvm:20", digest=digest
+        )
+
+    def test_add_disk_lxc_forwards_config_digest(self):
+        digest = "b" * 40
+        lxc_mock = self._mock_lxc({"rootfs": "local-lvm:8", "digest": digest})
+
+        resp = self.client.post(
+            "/api/vm/test-node/101/disks",
+            json={
+                "storage": "local-lvm",
+                "size_gb": 16,
+                "path": "/mnt/extra",
+            },
+        )
+
+        self.assertEqual(resp.status_code, 200)
+        lxc_mock.config.put.assert_called_once_with(
+            mp0="local-lvm:16,mp=/mnt/extra", digest=digest
+        )
+
+    def test_add_disk_qemu_rejects_boolean_and_fractional_sizes(self):
+        qemu_mock = self._mock_qemu({})
+
+        for size_gb in (True, 20.5, "20.5"):
+            with self.subTest(size_gb=size_gb):
+                resp = self.client.post(
+                    "/api/vm/test-node/100/disks",
+                    json={"storage": "local-lvm", "size_gb": size_gb, "bus": "scsi"},
+                )
+                self.assertEqual(resp.status_code, 400)
+
+        qemu_mock.config.get.assert_not_called()
+        qemu_mock.config.put.assert_not_called()
+
+    def test_add_disk_lxc_rejects_boolean_and_fractional_sizes(self):
+        lxc_mock = self._mock_lxc({"rootfs": "local-lvm:8"})
+
+        for size_gb in (True, 16.5, "16.5"):
+            with self.subTest(size_gb=size_gb):
+                resp = self.client.post(
+                    "/api/vm/test-node/101/disks",
+                    json={"storage": "local-lvm", "size_gb": size_gb, "path": "/mnt/extra"},
+                )
+                self.assertEqual(resp.status_code, 400)
+
+        lxc_mock.config.get.assert_not_called()
+        lxc_mock.config.put.assert_not_called()
+
     def test_add_disk_qemu_invalid_bus(self):
         self._mock_qemu({})
         resp = self.client.post(

@@ -4771,7 +4771,7 @@ def api_resources_by_node():
                                 "vmid": guest["vmid"],
                                 "name": guest.get("name"),
                                 "status": guest.get("status"),
-                                "maxcpu": guest.get("maxcpu"),
+                                "maxcpu": guest.get("maxcpu") if guest.get("maxcpu") is not None else guest.get("cpus"),
                                 "maxmem": guest.get("maxmem"),
                                 "template": is_template,
                             }

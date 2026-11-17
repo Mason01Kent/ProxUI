@@ -137,7 +137,7 @@ class TestAPIEndpoints(unittest.TestCase):
                 "vmid": 100,
                 "name": "test-vm",
                 "status": "running",
-                "maxcpu": 2,
+                "cpus": 2,
                 "maxmem": 4096,
             },
             {

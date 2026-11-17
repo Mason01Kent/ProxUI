@@ -127,6 +127,138 @@ class TestAPIEndpoints(unittest.TestCase):
         self.assertEqual(data[0]["vmid"], "100")
 
     @patch("app.get_proxmox_connection")
+    def test_api_resources_by_node_returns_complete_visible_inventory(
+        self, mock_get_connection
+    ):
+        connection = Mock()
+        node = connection.nodes.return_value
+        node.qemu.get.return_value = [
+            {
+                "vmid": 100,
+                "name": "test-vm",
+                "status": "running",
+                "cpus": 2,
+                "maxmem": 4096,
+            },
+            {
+                "vmid": 900,
+                "name": "template-vm",
+                "template": 1,
+                "maxcpu": 1,
+                "maxmem": 2048,
+            },
+        ]
+        node.lxc.get.return_value = [
+            {
+                "vmid": 101,
+                "name": "test-container",
+                "status": "stopped",
+                "maxcpu": 1,
+                "maxmem": 1024,
+            },
+        ]
+        mock_get_connection.return_value = connection
+
+        response = self.client.get("/api/resources/by-node")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            [
+                {
+                    "node": "test-node",
+                    "complete": True,
+                    "resources": [
+                        {
+                            "node": "test-node",
+                            "type": "qemu",
+                            "vmid": 100,
+                            "name": "test-vm",
+                            "status": "running",
+                            "maxcpu": 2,
+                            "maxmem": 4096,
+                            "template": False,
+                        },
+                        {
+                            "node": "test-node",
+                            "type": "qemu",
+                            "vmid": 900,
+                            "name": "template-vm",
+                            "status": None,
+                            "maxcpu": 1,
+                            "maxmem": 2048,
+                            "template": True,
+                        },
+                        {
+                            "node": "test-node",
+                            "type": "lxc",
+                            "vmid": 101,
+                            "name": "test-container",
+                            "status": "stopped",
+                            "maxcpu": 1,
+                            "maxmem": 1024,
+                            "template": False,
+                        },
+                    ],
+                }
+            ],
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_resources_by_node_marks_qemu_failure_incomplete_and_keeps_lxc(
+        self, mock_get_connection
+    ):
+        connection = Mock()
+        node = connection.nodes.return_value
+        node.qemu.get.side_effect = RuntimeError("not returned to caller")
+        node.lxc.get.return_value = [{"vmid": 101, "maxcpu": 1, "maxmem": 1024}]
+        mock_get_connection.return_value = connection
+
+        response = self.client.get("/api/resources/by-node")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()[0]
+        self.assertFalse(data["complete"])
+        self.assertNotIn("error", data)
+        self.assertEqual(
+            [resource["type"] for resource in data["resources"]], ["lxc"]
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_resources_by_node_marks_lxc_failure_incomplete_and_keeps_qemu(
+        self, mock_get_connection
+    ):
+        connection = Mock()
+        node = connection.nodes.return_value
+        node.qemu.get.return_value = [{"vmid": 100, "maxcpu": 2, "maxmem": 4096}]
+        node.lxc.get.side_effect = RuntimeError("not returned to caller")
+        mock_get_connection.return_value = connection
+
+        response = self.client.get("/api/resources/by-node")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()[0]
+        self.assertFalse(data["complete"])
+        self.assertNotIn("error", data)
+        self.assertEqual(
+            [resource["type"] for resource in data["resources"]], ["qemu"]
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_api_resources_by_node_marks_missing_connection_incomplete(
+        self, mock_get_connection
+    ):
+        mock_get_connection.return_value = None
+
+        response = self.client.get("/api/resources/by-node")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            [{"node": "test-node", "complete": False, "resources": []}],
+        )
+
+    @patch("app.get_proxmox_connection")
     def test_api_node_status_success(self, mock_get_connection):
         """Test successful node status retrieval"""
         mock_connection = Mock()
@@ -166,6 +298,7 @@ class TestAPIEndpoints(unittest.TestCase):
                 "content": "images,rootdir",
                 "total": 21474836480,
                 "used": 5368709120,
+                "avail": 12884901888,
             },
             {
                 "storage": "local",
@@ -185,7 +318,39 @@ class TestAPIEndpoints(unittest.TestCase):
         data = json.loads(response.data)
         self.assertEqual(len(data), 1)  # Only local-lvm supports images
         self.assertEqual(data[0]["storage"], "local-lvm")
-        self.assertIn("available_gb", data[0])
+        self.assertEqual(data[0]["available_gb"], 12.0)
+        self.assertEqual(data[0]["available_bytes"], 12884901888)
+
+    @patch("app.get_proxmox_connection")
+    def test_api_node_storages_does_not_guess_missing_available_space(self, mock_get_connection):
+        connection = Mock()
+        connection.nodes.return_value.storage.get.return_value = [{
+            "storage": "unknown", "enabled": 1, "content": "images",
+            "total": 100, "used": 50,
+        }]
+        mock_get_connection.return_value = connection
+        response = self.client.get("/api/node/test-node/storages?vm_type=qemu")
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("available_gb", response.get_json()[0])
+
+    @patch("app.get_proxmox_connection")
+    def test_api_node_storages_reports_effective_allocation_permission(self, mock_get_connection):
+        connection = Mock()
+        connection.nodes.return_value.storage.get.return_value = [
+            {"storage": "allowed", "enabled": 1, "content": "images", "avail": 10},
+            {"storage": "denied", "enabled": 1, "content": "images", "avail": 10},
+            {"storage": "unknown", "enabled": 1, "content": "images", "avail": 10},
+        ]
+        def permissions(path):
+            if path.endswith("unknown"):
+                raise RuntimeError("unavailable")
+            return {path: {"Datastore.AllocateSpace": int(path.endswith("allowed"))}}
+        connection.access.permissions.get.side_effect = permissions
+        mock_get_connection.return_value = connection
+        response = self.client.get("/api/node/test-node/storages?vm_type=qemu")
+        self.assertEqual(response.status_code, 200)
+        by_name = {row["storage"]: row["can_allocate"] for row in response.get_json()}
+        self.assertEqual(by_name, {"allowed": True, "denied": False, "unknown": None})
 
     @patch("app.get_proxmox_connection")
     def test_api_node_templates(self, mock_get_connection):
@@ -288,6 +453,29 @@ class TestAPIEndpoints(unittest.TestCase):
 
         # Verify the API was called with correct parameters
         mock_connection.nodes.return_value.qemu.return_value.config.put.assert_called_once()
+
+    @patch("app.get_proxmox_connection")
+    def test_vm_config_forwards_digest_and_only_requested_setting(self, mock_get_connection):
+        connection = Mock()
+        mock_get_connection.return_value = connection
+        digest = "a" * 40
+        response = self.client.put(
+            "/api/vm/test-node/100/config", json={"memory": 4096, "digest": digest}
+        )
+        self.assertEqual(response.status_code, 200)
+        connection.nodes.return_value.qemu.return_value.config.put.assert_called_once_with(
+            memory=4096, digest=digest
+        )
+
+    @patch("app.get_proxmox_connection")
+    def test_vm_config_rejects_invalid_digest_without_writing(self, mock_get_connection):
+        connection = Mock()
+        mock_get_connection.return_value = connection
+        response = self.client.put(
+            "/api/vm/test-node/100/config", json={"memory": 4096, "digest": "bad"}
+        )
+        self.assertEqual(response.status_code, 400)
+        connection.nodes.return_value.qemu.return_value.config.put.assert_not_called()
 
     @patch("app.get_proxmox_connection")
     def test_api_vm_resize_disk(self, mock_get_connection):

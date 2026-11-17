@@ -317,6 +317,15 @@ def cleanup_expired_vnc_sessions():
             del vnc_sessions[sid]
 
 
+def take_vnc_session(session_id):
+    """Atomically consume a short-lived VNC session, including expired ones."""
+    with vnc_sessions_lock:
+        session = vnc_sessions.pop(session_id, None)
+    if not session or time.time() - session["created_at"] > VNC_SESSION_TIMEOUT:
+        return None
+    return session
+
+
 # =============================================================================
 # Background Job Queue System
 # =============================================================================
@@ -7599,11 +7608,10 @@ def vnc_websocket_proxy(ws, session_id):
     WebSocket proxy that relays traffic between browser (noVNC) and Proxmox VNC.
     """
     # Get session data
-    with vnc_sessions_lock:
-        session = vnc_sessions.get(session_id)
-        if not session:
-            ws.close(1008, "Invalid or expired session")
-            return
+    session = take_vnc_session(session_id)
+    if not session:
+        ws.close(1008, "Invalid or expired session")
+        return
 
     # Build Proxmox WebSocket URL
     proxmox_host = session["proxmox_host"]
